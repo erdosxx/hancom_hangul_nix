@@ -176,6 +176,7 @@ stdenv.mkDerivation {
       --unset QT_QPA_PLATFORMTHEME \
       --unset QT_STYLE_OVERRIDE \
       --unset QML2_IMPORT_PATH \
+      --prefix XDG_DATA_DIRS : "${glib.getSchemaDataDirPath gtk3}" \
       --set QT_IM_MODULE ${imName} \
       --set XMODIFIERS "@im=${imName}" \
       --set-default QT_SCALE_FACTOR ${scaleFactor} \
