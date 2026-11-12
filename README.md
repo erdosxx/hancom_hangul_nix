@@ -115,24 +115,39 @@ inputs.hancom-hwp.packages.${system}.hancom-fonts.override { fontSets = [ "hanco
   libstdc++ symbols the bundled Qt 5.11 re-exported under the `Qt_5` version.
   Its executable-stack flag is cleared because current glibc refuses to
   `dlopen` such libraries.
-- **Faster typing (`fastRepaint`, default on):** in 11.20.0.1520,
-  `libhsp.so` (Hancom's Win32 emulation layer) fingerprints a window's whole
-  back-buffer image with MD5 when a DC is created and again after painting,
-  and repaints only if the two differ. On a 1600x1000 window that is ~30 MB
-  hashed per keystroke. 11.20.0.989 had no such check. The comparison has to
-  stay (it ends the repaint loop; without it Hcell repaints forever), so
-  `compat/patch-libhsp-md5.py` replaces only the fingerprint function with a
-  fast 64-bit hash (`compat/libhsp-fingerprint.s`). It verifies the original
-  bytes first.
+- **Fast, partial repaints (`fastRepaint`, default on):** `libhsp.so`
+  (Hancom's Win32 emulation layer) keeps a back-buffer image per window. In
+  11.20.0.1520 it MD5-hashes the *whole* image when a DC is created and again
+  when it is released, and if the hashes differ calls `QWidget::update()`,
+  which repaints the *whole* window (blend, clear and X11 upload of ~15 MB on
+  a 2540x1500 window). Both happen several times per keystroke. The
+  "unchanged -> no update" check must stay because it ends libhsp's repaint
+  loop.
 
-  | 222 keys, 1600x1000 window | CPU/key (Korean) | idle CPU |
-  | -------------------------- | ---------------- | -------- |
-  | 11.20.0.989                | 47 ms            | ~2%      |
-  | 11.20.0.1520 unpatched     | 70 ms            | ~15%     |
-  | 11.20.0.1520 `fastRepaint` | 49–51 ms         | ~5%      |
+  `compat/patch-libhsp.py` makes the fingerprint function tail-call
+  `hwp_fast_fingerprint` in `compat/libhwp-fastpatch.cpp`, built into
+  `Bin/libhwp-fastpatch.so`. To do that it reuses the function's private
+  `QImage::sizeInBytes()` import (renamed with `patchelf`) and adds the
+  library as NEEDED. It verifies the original bytes first. The new code keeps
+  a copy of the window image plus a hash per row. On DC release it hashes the
+  rows (XXH3, up to 4 threads), finds the changed spans, and calls
+  `QWidget::update(region)` for the changed rectangles only.
 
-  Hwp renders the same as unpatched (screenshots compared; Hcell, Hshow and
-  Hword were also checked before they were removed). The remaining ~45 ms per key is Hwp's own work, also in 989.
+  Key press -> first repaint latency, Korean input via fcitx5, measured with
+  XTest + XDamage (median / p90):
+
+  | window                     | 1600x1000     | 2540x1500       |
+  | -------------------------- | ------------- | --------------- |
+  | 11.20.0.1520 unpatched     | 122 / 189 ms  | 230 / 256 ms    |
+  | 11.20.0.989 (old package)  | 29 / 35 ms    | 71 / 80 ms      |
+  | **11.20.0.1520 `fastRepaint`** | **15 / 21 ms** | **19 / 28 ms** |
+
+  Idle CPU: ~2.5% (unpatched ~13–15%). The screen was checked against Hwp's
+  back buffer after scripted sessions (typing, paging, menus, a dialog, window
+  resize, `.hwp` and `.hwpx` files): no pixel differs. Runtime switches:
+  `HWP_REPAINT=hash` (whole-window updates, with XXH3 instead of MD5),
+  `HWP_FASTPATCH_THREADS=1` (less CPU while typing, ~28 ms instead of ~20 ms
+  latency at 2540x1500), `HWP_FASTPATCH_DUMP=DIR` (debug dumps).
 - **ibus mode:** keeps the bundled Qt 5.11. Plugins that need Qt modules not in
   the bundle (Wayland, eglfs, webgl, virtual keyboard, MultimediaGstTools) are
   removed.
