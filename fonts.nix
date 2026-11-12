@@ -1,4 +1,4 @@
-# Korean fonts bundled with Hancom Office Hwp 2020 (opt/hnc/hoffice11/Shared/TTF),
+# Korean fonts bundled with Hancom Office (opt/hnc/hoffice11/Shared/TTF),
 # exposed in share/fonts so other programs (e.g. IeumOffice, LibreOffice) can use them.
 #
 # fontSets selects by font family (read with fc-scan at build time):
@@ -17,7 +17,7 @@
   lib,
   runCommand,
   fontconfig,
-  hancom-hwp,
+  hancom-office,
   fontSets ? [ "hcr" ],
 }:
 
@@ -37,16 +37,16 @@ assert lib.assertMsg (
 let
   regex = lib.concatMapStringsSep "|" (s: "(${patterns.${s}})") fontSets;
 in
-runCommand "hancom-fonts-${hancom-hwp.version}"
+runCommand "hancom-fonts-${hancom-office.version}"
   {
     nativeBuildInputs = [ fontconfig ];
     passthru = { inherit fontSets; };
-    meta = removeAttrs hancom-hwp.meta [ "mainProgram" ] // {
-      description = "Korean fonts bundled with Hancom Office Hwp 2020 (${toString fontSets})";
+    meta = removeAttrs hancom-office.meta [ "mainProgram" ] // {
+      description = "Korean fonts bundled with Hancom Office (${toString fontSets})";
     };
   }
   ''
-    src=${hancom-hwp}/opt/hnc/hoffice11/Shared/TTF
+    src=${hancom-office}/opt/hnc/hoffice11/Shared/TTF
     dest=$out/share/fonts/truetype/hancom
     mkdir -p $dest
 
@@ -54,7 +54,7 @@ runCommand "hancom-fonts-${hancom-hwp.version}"
       while IFS= read -r -d "" f; do
         family=$(fc-scan --format '%{family[0]}' "$f" 2>/dev/null) || continue
         if printf '%s\n' "$family" | grep -qE ${lib.escapeShellArg regex}; then
-          # copy (not link) so the fonts don't keep the 1.7 GB Hwp install alive
+          # copy (not link) so the fonts don't keep the 2.9 GB Hancom Office install alive
           rel=''${f#$src/}
           mkdir -p "$dest/$(dirname "$rel")"
           cp "$f" "$dest/$rel"
