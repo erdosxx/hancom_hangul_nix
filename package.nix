@@ -1,7 +1,6 @@
 {
   lib,
   stdenv,
-  callPackage,
   fetchurl,
   dpkg,
   autoPatchelfHook,
@@ -24,7 +23,6 @@
   gst_all_1,
   gtk3,
   harfbuzzFull,
-  icu63,
   libdrm,
   libGL,
   libGLU,
@@ -69,22 +67,49 @@ let
   appDir = "opt/hnc/hoffice11";
   useSystemQt = inputMethod == "fcitx5";
 
-  # Hword's libHwordApp.so needs libcrypto/libssl 1.1 (removed from nixpkgs).
-  openssl_1_1 = callPackage ./openssl_1_1.nix { };
-
-  # program name -> desktop file
-  apps = {
-    hwp = "hoffice11-hwp.desktop"; # Hangul (Hwp)
-    hcl = "hoffice11-hcl.desktop"; # Hcell (spreadsheet)
-    hsl = "hoffice11-hsl.desktop"; # Hshow (presentation)
-    hword = "hoffice11-hword.desktop"; # Hword (docx editor)
-  };
+  # Only Hwp is installed. Files used solely by Hcell (hcl), Hshow (hsl) and
+  # Hword (hword): no Hwp binary links them or names them (NEEDED + strings
+  # checked), and a traced Hwp session never opens them.
+  otherApps = [
+    "hcl"
+    "hsl"
+    "hword"
+  ];
+  otherAppFiles = [
+    "Bin/hcl"
+    "Bin/hsl"
+    "Bin/hword"
+    "Bin/HCell"
+    "Bin/HShow"
+    "Bin/Hword"
+    "Bin/Resource/HCell"
+    "Bin/Resource/HShow"
+    "Bin/Resource/Hword"
+    "Bin/Strings/hcell_*"
+    "Bin/Strings/hshow_*"
+    "Bin/Strings/hword_*"
+    "Bin/Shared/DocTheme"
+    "Bin/Shared/HwordFont"
+    "Bin/HCellABase.so"
+    "Bin/libHCellBase.so"
+    "Bin/libHCellBook.so"
+    "Bin/libHCellCoreEngine.so"
+    "Bin/libHCellDrawObj.so"
+    "Bin/libhclunix-qt.so"
+    "Bin/libNxImgManDLL.so"
+    "Bin/libHwordApp.so" # (needed OpenSSL 1.1)
+    "Bin/HwordAction.so"
+    "Bin/libShowAnimationRes.so"
+    "Bin/HncTransitionGL.so"
+    "Bin/libMathEditorNative.so" # Hcell/Hshow equations (needed ICU 63)
+    "Shared/CellTemplate"
+    "Shared/HwordTemplate"
+  ];
 
   # nixpkgs Qt 5.15 modules replacing the bundled Qt 5.11 ones (fcitx5 mode).
   systemQt = with libsForQt5; [
     qtbase
     qtsvg
-    qtx11extras
     qtmultimedia
     qtdeclarative # Qml, Quick, QuickWidgets
     qtwebchannel
@@ -108,7 +133,7 @@ let
   imName = if useSystemQt then "fcitx" else "ibus";
 in
 stdenv.mkDerivation {
-  pname = "hancom-office";
+  pname = "hancom-hwp";
   version = "11.20.0.1520";
 
   src = fetchurl {
@@ -144,7 +169,6 @@ stdenv.mkDerivation {
     glib
     gtk3
     harfbuzzFull
-    icu63 # libMathEditorNative.so
     libdrm
     libGL
     libGLU
@@ -153,7 +177,6 @@ stdenv.mkDerivation {
     libxkbcommon
     nspr
     nss
-    openssl_1_1
     pango
     stdenv.cc.cc.lib
     wayland
@@ -174,7 +197,7 @@ stdenv.mkDerivation {
     gstreamer
     gst-plugins-base
   ])
-  # The apps only use public Qt5 API (symbol versions Qt_5 / Qt_5.11), so they
+  # Hwp only uses public Qt5 API (symbol versions Qt_5 / Qt_5.11), so they
   # run fine on the newer, ABI-compatible Qt 5.15 from nixpkgs.
   ++ lib.optionals useSystemQt systemQt;
 
@@ -206,6 +229,17 @@ stdenv.mkDerivation {
     mkdir -p $out/opt $out/bin
     cp -r opt/hnc $out/opt/
     cp -r usr/share $out/share
+
+    # Hwp only: drop Hcell, Hshow and Hword.
+    for f in ${lib.concatMapStringsSep " " (f: "$out/${appDir}/${f}") otherAppFiles}; do
+      [ -e "$f" ] || { echo "missing: $f"; exit 1; }
+      rm -rf "$f"
+    done
+    for app in ${toString otherApps}; do
+      rm $out/share/applications/hoffice11-$app.desktop \
+         $out/share/mime/packages/hoffice11-$app.xml
+      find $out/share/icons -name "hoffice11-$app*" -delete
+    done
   ''
   + lib.optionalString fastRepaint ''
     python3 ${./compat/patch-libhsp-md5.py} $out/${appDir}/Bin/libhsp.so
@@ -256,8 +290,7 @@ stdenv.mkDerivation {
     ln -s ${lib.getLib curlWithGnuTls}/lib/libcurl.so.4 \
       $out/${appDir}/Bin/compat/libcurl-gnutls.so.4
 
-    for app in ${toString (lib.attrNames apps)}; do
-      makeWrapper $out/${appDir}/Bin/$app $out/bin/$app \
+    makeWrapper $out/${appDir}/Bin/hwp $out/bin/hwp \
         --prefix LD_LIBRARY_PATH : "$out/${appDir}/Bin/compat:${lib.getLib libxcursor}/lib" \
         --set QT_PLUGIN_PATH "$plugins" \
         --set QT_QPA_PLATFORM xcb \
@@ -275,22 +308,15 @@ stdenv.mkDerivation {
         --set-default QTCOMPOSE ${libx11}/share/X11/locale \
         --set-default LC_ALL ${hwpLocale} \
         --set-default LANG ${hwpLocale}
-    done
-  ''
-  + lib.concatStrings (
-    lib.mapAttrsToList (app: desktop: ''
-      substituteInPlace $out/share/applications/${desktop} \
-        --replace-fail "Exec=/${appDir}/Bin/${app}" "Exec=$out/bin/${app}"
-    '') apps
-  )
-  + ''
+
+    substituteInPlace $out/share/applications/hoffice11-hwp.desktop \
+      --replace-fail "Exec=/${appDir}/Bin/hwp" "Exec=$out/bin/hwp"
+
     runHook postInstall
   '';
 
-  passthru = { inherit openssl_1_1; };
-
   meta = {
-    description = "Hancom Office 2022 Beta (Hwp, Hcell, Hshow, Hword) for Linux";
+    description = "Hancom Office Hwp 2022 Beta (Hangul word processor) for Linux";
     homepage = "https://www.hancom.com/";
     license = lib.licenses.unfree;
     sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];

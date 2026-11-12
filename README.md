@@ -1,8 +1,9 @@
-# Hancom Office (Hwp, Hcell, Hshow, Hword) for Nix — native, no Docker
+# Hancom Hwp for Nix — native, no Docker
 
-Packages `hoffice_11.20.0.1520_amd64.deb` (Hancom Office 2022 Beta for Linux:
-Hwp, Hcell, Hshow, Hword) with `autoPatchelfHook` (same approach as `viber` in
-nixpkgs).
+Packages Hwp (Hangul word processor) from `hoffice_11.20.0.1520_amd64.deb`
+(Hancom Office 2022 Beta for Linux) with `autoPatchelfHook` (same approach as
+`viber` in nixpkgs). Only Hwp is installed; Hcell, Hshow and Hword are removed
+(1.9 GB instead of 2.8 GB, see "How it works").
 
 Hancom no longer offers this `.deb` on its CDN. It is fetched from the
 [bada-ie.com mirror](https://www.bada-ie.com/board/view/?code=all&uid=4366),
@@ -16,26 +17,22 @@ nix-store --add-fixed sha256 hoffice_11.20.0.1520_amd64.deb
 ## Run
 
 ```shell
-nix run github:erdosxx/hancom_hangul_nix            # Hwp; or: nix run .
+nix run github:erdosxx/hancom_hangul_nix            # or: nix run .
 nix run . -- document.hwp
-nix run .#hcell -- sheet.xlsx                       # also .#hshow, .#hword
 ```
 
 ## Outputs
 
-| Output                     | Description                                                     |
-| -------------------------- | --------------------------------------------------------------- |
-| `packages.*.default`            | = `hancom-office` (fcitx5)                                  |
-| `packages.*.hancom-office`      | Uses nixpkgs Qt 5.15 + `fcitx5-qt` plugin (**fcitx5 input**) |
-| `packages.*.hancom-office-ibus` | Uses bundled Qt 5.11 + its ibus plugin (**ibus input**)     |
-| `packages.*.hancom-hwp{,-ibus}` | Old names, aliases of the two above                         |
-| `packages.*.hancom-fonts`       | Bundled Korean fonts for other apps (see below)             |
-| `apps.*.{default,hwp}`          | Runs `hwp` (Hangul word processor)                          |
-| `apps.*.hcell` / `hshow` / `hword` | Runs `hcl` (spreadsheet) / `hsl` (presentation) / `hword` (docx) |
-| `overlays.default`              | Adds `pkgs.hancom-office` (+ alias `hancom-hwp`), `pkgs.hancom-fonts` |
+| Output                       | Description                                                  |
+| ---------------------------- | ------------------------------------------------------------ |
+| `packages.*.default`         | = `hancom-hwp` (fcitx5)                                      |
+| `packages.*.hancom-hwp`      | Uses nixpkgs Qt 5.15 + `fcitx5-qt` plugin (**fcitx5 input**) |
+| `packages.*.hancom-hwp-ibus` | Uses bundled Qt 5.11 + its ibus plugin (**ibus input**)      |
+| `packages.*.hancom-fonts`    | Bundled Korean fonts for other apps (see below)              |
+| `apps.*.default`             | Runs `hwp`                                                   |
+| `overlays.default`           | Adds `pkgs.hancom-hwp`, `pkgs.hancom-fonts`                  |
 
-The package installs `bin/{hwp,hcl,hsl,hword}`, their `.desktop` entries, icons
-and MIME types.
+The package installs `bin/hwp`, its `.desktop` entry, icons and MIME types.
 
 ## Use in NixOS / home-manager
 
@@ -59,7 +56,7 @@ inputs.hancom-hwp.packages.${system}.default.override {
 }
 ```
 
-With the overlay, `pkgs.hancom-office` is unfree, so allow it
+With the overlay, `pkgs.hancom-hwp` is unfree, so allow it
 (`nixpkgs.config.allowUnfree` or an `allowUnfreePredicate`).
 
 ## Bundled Korean fonts for other apps (`hancom-fonts`)
@@ -101,12 +98,14 @@ inputs.hancom-hwp.packages.${system}.hancom-fonts.override { fontSets = [ "hanco
 - The `.deb` is fetched with the `Referer` header the mirror requires.
 - `autoPatchelfHook` patches all ELF files. Debian's `libcurl-gnutls.so.4` is
   provided as a symlink to `curlWithGnuTls`.
-- Extra runtime libraries: `icu63` (equation editor), GStreamer + PulseAudio
-  (media objects), and OpenSSL 1.1.1w built from source (`openssl_1_1.nix`).
-  OpenSSL 1.1 is end of life and removed from nixpkgs. Only Hword's
-  `libHwordApp.so` uses it, for local AES/SHA document encryption, not TLS.
-  It is private to this package.
-- **fcitx5 mode (default):** the apps use only the public Qt5 ABI (`Qt_5`/`Qt_5.11`
+- **Hwp only:** Hcell, Hshow and Hword (their executables, libraries,
+  resources, strings and templates, listed in `otherAppFiles` in
+  `package.nix`) are deleted. No remaining binary links them or names them,
+  and traced Hwp sessions (blank document, `.hwp`, `.hwpx`) never open them.
+  This also drops OpenSSL 1.1 (only Hword used it) and ICU 63 (only the
+  Hcell/Hshow equation library used it).
+- Extra runtime libraries: GStreamer + PulseAudio (media objects).
+- **fcitx5 mode (default):** Hwp uses only the public Qt5 ABI (`Qt_5`/`Qt_5.11`
   symbol versions), so the bundled Qt 5.11 is removed and nixpkgs Qt 5.15 is used.
   This lets the real `fcitx5-qt` Qt5 plugin load (`QT_IM_MODULE=fcitx`). A plugin
   built for Qt 5.15 cannot load into the bundled Qt 5.11.
@@ -132,8 +131,8 @@ inputs.hancom-hwp.packages.${system}.hancom-fonts.override { fontSets = [ "hanco
   | 11.20.0.1520 unpatched     | 70 ms            | ~15%     |
   | 11.20.0.1520 `fastRepaint` | 49–51 ms         | ~5%      |
 
-  Hwp, Hcell, Hshow and Hword render the same as unpatched (screenshots
-  compared). The remaining ~45 ms per key is Hwp's own work, also in 989.
+  Hwp renders the same as unpatched (screenshots compared; Hcell, Hshow and
+  Hword were also checked before they were removed). The remaining ~45 ms per key is Hwp's own work, also in 989.
 - **ibus mode:** keeps the bundled Qt 5.11. Plugins that need Qt modules not in
   the bundle (Wayland, eglfs, webgl, virtual keyboard, MultimediaGstTools) are
   removed.
