@@ -46,15 +46,18 @@
   libxcb,
   zlib,
   libsForQt5,
+  xxhash,
   # user options
   scaleFactor ? "1", # QT_SCALE_FACTOR, e.g. "1.2" to zoom
   # "fcitx5": replace the bundled Qt 5.11 with nixpkgs Qt 5.15 + fcitx5-qt plugin.
   # "ibus"  : keep the bundled Qt 5.11, which only ships an ibus input plugin.
   inputMethod ? "fcitx5",
   hwpLocale ? "ko_KR.UTF-8", # fixes Korean file names / Korean UI
-  # Binary-patch libhsp.so to fingerprint the window image with a fast hash
-  # instead of MD5 on every repaint (the MD5 is most of the CPU time while
-  # typing; see compat/patch-libhsp-md5.py). false = keep libhsp.so unchanged.
+  # Patch libhsp.so so window repaints are detected by diffing the window
+  # image (instead of MD5) and only the changed rectangles are repainted
+  # (instead of the whole window). Typing latency on a 2540x1500 window:
+  # 127 -> ~20 ms. See compat/libhwp-fastpatch.cpp.
+  # false = keep Hancom's libhsp.so unchanged.
   fastRepaint ? true,
 }:
 
@@ -212,12 +215,33 @@ stdenv.mkDerivation {
   '';
 
   dontConfigure = true;
-  dontBuild = !useSystemQt;
+  dontBuild = !useSystemQt && !fastRepaint;
   buildPhase = ''
     runHook preBuild
+  ''
+  + lib.optionalString useSystemQt ''
     $CXX -shared -fPIC -O2 -o libqt511-stdcxx-shim.so \
       -Wl,--version-script=${./compat/qt511-stdcxx-shim.map} \
       ${./compat/qt511-stdcxx-shim.cpp}
+  ''
+  # Built against nixpkgs Qt 5.15 headers; it only uses QImage, QRegion and
+  # QWidget::update(QRegion), so it also runs on the bundled Qt 5.11 (ibus).
+  # The rpath is removed so autoPatchelf picks the Qt the variant uses.
+  + lib.optionalString fastRepaint (
+    let
+      qt = libsForQt5.qtbase;
+    in
+    ''
+      $CXX -std=c++17 -shared -fPIC -O2 -fvisibility=hidden -pthread -DQT_NO_VERSION_TAGGING \
+        -o libhwp-fastpatch.so ${./compat/libhwp-fastpatch.cpp} \
+        -I${lib.getDev qt}/include -I${lib.getDev qt}/include/QtCore \
+        -I${lib.getDev qt}/include/QtGui -I${lib.getDev qt}/include/QtWidgets \
+        -I${xxhash}/include -L${lib.getLib qt}/lib \
+        -lQt5Widgets -lQt5Gui -lQt5Core -ldl
+      ${lib.getExe patchelfUnstable} --remove-rpath libhwp-fastpatch.so
+    ''
+  )
+  + ''
     runHook postBuild
   '';
   dontStrip = true;
@@ -242,7 +266,14 @@ stdenv.mkDerivation {
     done
   ''
   + lib.optionalString fastRepaint ''
-    python3 ${./compat/patch-libhsp-md5.py} $out/${appDir}/Bin/libhsp.so
+    # libhsp's window-image fingerprint -> hwp_fast_fingerprint (see compat/)
+    hsp=$out/${appDir}/Bin/libhsp.so
+    python3 ${./compat/patch-libhsp.py} $hsp
+    echo "_ZNK6QImage11sizeInBytesEv hwp_fast_fingerprint" > rename.map
+    ${lib.getExe patchelfUnstable} --rename-dynamic-symbols rename.map $hsp
+    ${lib.getExe patchelfUnstable} --clear-symbol-version hwp_fast_fingerprint $hsp
+    ${lib.getExe patchelfUnstable} --add-needed libhwp-fastpatch.so $hsp
+    install -m755 libhwp-fastpatch.so $out/${appDir}/Bin/
   ''
   + ''
 
