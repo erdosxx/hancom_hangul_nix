@@ -7,6 +7,7 @@
   autoPatchelfHook,
   makeWrapper,
   patchelfUnstable, # --clear-execstack (patchelf >= 0.18)
+  python3,
   # runtime libraries
   alsa-lib,
   atk,
@@ -53,6 +54,10 @@
   # "ibus"  : keep the bundled Qt 5.11, which only ships an ibus input plugin.
   inputMethod ? "fcitx5",
   hwpLocale ? "ko_KR.UTF-8", # fixes Korean file names / Korean UI
+  # Binary-patch libhsp.so to fingerprint the window image with a fast hash
+  # instead of MD5 on every repaint (the MD5 is most of the CPU time while
+  # typing; see compat/patch-libhsp-md5.py). false = keep libhsp.so unchanged.
+  fastRepaint ? true,
 }:
 
 assert lib.assertOneOf "inputMethod" inputMethod [
@@ -122,7 +127,8 @@ stdenv.mkDerivation {
     autoPatchelfHook
     makeWrapper
     patchelfUnstable
-  ];
+  ]
+  ++ lib.optional fastRepaint python3;
 
   buildInputs = [
     alsa-lib
@@ -200,6 +206,11 @@ stdenv.mkDerivation {
     mkdir -p $out/opt $out/bin
     cp -r opt/hnc $out/opt/
     cp -r usr/share $out/share
+  ''
+  + lib.optionalString fastRepaint ''
+    python3 ${./compat/patch-libhsp-md5.py} $out/${appDir}/Bin/libhsp.so
+  ''
+  + ''
 
     qtdir=$out/${appDir}/Bin/qt
   ''

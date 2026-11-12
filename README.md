@@ -55,6 +55,7 @@ inputs.hancom-hwp.packages.${system}.default.override {
   scaleFactor = "1.2";        # QT_SCALE_FACTOR (default "1"; env var still wins)
   inputMethod = "fcitx5";     # or "ibus"
   hwpLocale   = "ko_KR.UTF-8";
+  fastRepaint = true;         # false = leave Hancom's libhsp.so unpatched
 }
 ```
 
@@ -115,12 +116,35 @@ inputs.hancom-hwp.packages.${system}.hancom-fonts.override { fontSets = [ "hanco
   libstdc++ symbols the bundled Qt 5.11 re-exported under the `Qt_5` version.
   Its executable-stack flag is cleared because current glibc refuses to
   `dlopen` such libraries.
+- **Faster typing (`fastRepaint`, default on):** in 11.20.0.1520,
+  `libhsp.so` (Hancom's Win32 emulation layer) fingerprints a window's whole
+  back-buffer image with MD5 when a DC is created and again after painting,
+  and repaints only if the two differ. On a 1600x1000 window that is ~30 MB
+  hashed per keystroke. 11.20.0.989 had no such check. The comparison has to
+  stay (it ends the repaint loop; without it Hcell repaints forever), so
+  `compat/patch-libhsp-md5.py` replaces only the fingerprint function with a
+  fast 64-bit hash (`compat/libhsp-fingerprint.s`). It verifies the original
+  bytes first.
+
+  | 222 keys, 1600x1000 window | CPU/key (Korean) | idle CPU |
+  | -------------------------- | ---------------- | -------- |
+  | 11.20.0.989                | 47 ms            | ~2%      |
+  | 11.20.0.1520 unpatched     | 70 ms            | ~15%     |
+  | 11.20.0.1520 `fastRepaint` | 49–51 ms         | ~5%      |
+
+  Hwp, Hcell, Hshow and Hword render the same as unpatched (screenshots
+  compared). The remaining ~45 ms per key is Hwp's own work, also in 989.
 - **ibus mode:** keeps the bundled Qt 5.11. Plugins that need Qt modules not in
   the bundle (Wayland, eglfs, webgl, virtual keyboard, MultimediaGstTools) are
   removed.
 - The wrapper forces the X11 backend (`QT_QPA_PLATFORM=xcb`) and isolates
   `QT_PLUGIN_PATH`. It sets a full `glibcLocales` archive (`LOCALE_ARCHIVE_2_27`)
   so `ko_KR.UTF-8` works, which keeps Korean file names and the Korean UI.
+
+If typing feels slow, also check that `~/.hnc`, `~/.cache/hnc` and
+`~/.config/hnc` belong to you (an earlier Docker setup may have created them
+as root). If Hwp can't write its font cache there, Korean input gets about
+twice as slow.
 
 Note: the wrapper shell may print `setlocale: LC_ALL: cannot change locale`.
 This message comes from bash itself and is harmless; hwp gets the right locale.
