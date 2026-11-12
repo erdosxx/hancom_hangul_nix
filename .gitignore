@@ -2,3 +2,4 @@ result
 result-*
 .direnv/
 *.deb
+__pycache__/
