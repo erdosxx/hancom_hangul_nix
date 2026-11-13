@@ -64,6 +64,12 @@
   # wheel notch instead of three, real ScrollWindow()/UpdateWindow() (with
   # fastRepaint), and queued wheel notches merged into one step.
   fastScroll ? true,
+  # High-DPI UI fixes (see compat/patch-ui.py and the "High-DPI UI fixes"
+  # section of compat/libhwp-fastpatch.cpp; needs fastRepaint): formatting
+  # toolbar icons at 16 x round(DPI / 96) px from Hancom's 32 px icons or
+  # Scale2x, a font size box wide enough for its text, and recent file names
+  # in the 파일 menu no longer cut off.
+  hidpiUi ? true,
 }:
 
 assert lib.assertOneOf "inputMethod" inputMethod [
@@ -283,6 +289,9 @@ stdenv.mkDerivation {
   + lib.optionalString fastScroll ''
     python3 ${./compat/patch-hwp.py} $out/${appDir}/Bin/hwp
   ''
+  + lib.optionalString (fastRepaint && hidpiUi) ''
+    python3 ${./compat/patch-ui.py} $out/${appDir}/Bin/UxXml
+  ''
   + ''
 
     qtdir=$out/${appDir}/Bin/qt
@@ -347,7 +356,8 @@ stdenv.mkDerivation {
         --set-default QTCOMPOSE ${libx11}/share/X11/locale \
         --set-default LC_ALL ${hwpLocale} \
         --set-default LANG ${hwpLocale} \
-        ${lib.optionalString (fastRepaint && !fastScroll) "--set HWP_FASTSCROLL 0"}
+        ${lib.optionalString (fastRepaint && !fastScroll) "--set HWP_FASTSCROLL 0"} \
+        ${lib.optionalString (fastRepaint && !hidpiUi) "--set HWP_UIFIX 0"}
 
     substituteInPlace $out/share/applications/hoffice11-hwp.desktop \
       --replace-fail "Exec=/${appDir}/Bin/hwp" "Exec=$out/bin/hwp"
