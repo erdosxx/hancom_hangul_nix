@@ -56,11 +56,36 @@
 // scrolling long after the wheel stopped. An application event filter merges
 // wheel events for the document view that are already queued into one event
 // with the summed delta (Hwp scrolls notches x lines in one step for it).
+//
+// High-DPI UI fixes
+// -----------------
+// Hwp sizes its UI text by the screen DPI (Xft.dpi) but draws the formatting
+// toolbar's icons at a fixed 16 px. On high-DPI screens the same event filter
+//   * sets the toolbar icon size to 16 x round(DPI / 96) (32 at 144-191 DPI;
+//     HWP_TOOLBAR_ICON_SIZE=N overrides, 0 or 16 = off). patch-ui.py gives the
+//     toolbar Hancom's own 32 px icons where they exist; any other icon is
+//     enlarged with Scale2x (pixel-art scaling: sharp, no blur);
+//   * widens fixed-width toolbar boxes that are too narrow for their text
+//     (the font size box drew "pt" over the number);
+//   * re-sizes the menu row of the recent-file list once the list knows its
+//     height (it reported 20 px when the menu was laid out, cutting off the
+//     file names).
+// HWP_UIFIX=0 turns these off.
 #include <QtCore/QByteArray>
 #include <QtCore/QCoreApplication>
 #include <QtCore/QEvent>
 #include <QtCore/QPointer>
+#include <QtCore/QSet>
+#include <QtCore/QTimer>
+#include <QtGui/QGuiApplication>
+#include <QtGui/QIcon>
+#include <QtGui/QScreen>
 #include <QtGui/QWheelEvent>
+#include <QtWidgets/QLayout>
+#include <QtWidgets/QMenu>
+#include <QtWidgets/QScrollArea>
+#include <QtWidgets/QToolButton>
+#include <QtWidgets/QWidgetAction>
 #include <QtGui/QImage>
 #include <QtGui/QRegion>
 #include <QtWidgets/QAbstractScrollArea>
@@ -406,12 +431,234 @@ int updateWindow(void *hwnd)
 
 // ---- Wheel event coalescing -------------------------------------------------
 
-class WheelCoalescer : public QObject
+bool notifyObject(QObject *receiver, QEvent *ev)
+{
+    // QCoreApplication::sendEvent() is inline in Qt 5.11 (the ibus variant
+    // runs on it) and exported in 5.15; both call notifyInternal2().
+    using NotifyFn = bool (*)(QObject *, QEvent *);
+    static auto notify = reinterpret_cast<NotifyFn>(
+        dlsym(RTLD_DEFAULT, "_ZN16QCoreApplication15notifyInternal2EP7QObjectP6QEvent"));
+    return notify && notify(receiver, ev);
+}
+
+// ---- High-DPI UI fixes ------------------------------------------------------
+
+bool uiFixes()
+{
+    static const bool on = [] {
+        const char *e = env("HWP_UIFIX");
+        return !(e && !strcmp(e, "0"));
+    }();
+    return on;
+}
+
+int toolbarIconSize()
+{
+    static int size = -1;
+    if (size < 0) {
+        if (const char *e = env("HWP_TOOLBAR_ICON_SIZE")) {
+            size = qBound(0, atoi(e), 128);
+        } else {
+            const QScreen *screen = QGuiApplication::primaryScreen();
+            const qreal dpi = screen ? screen->logicalDotsPerInchY() : 96;
+            size = 16 * qMax(1, qRound(dpi / 96));
+        }
+        if (size <= 16)
+            size = 0;
+    }
+    return size;
+}
+
+bool isClass(const QObject *o, const char *name)
+{
+    return o && !strcmp(o->metaObject()->className(), name);
+}
+
+// Scale2x / EPX: doubles an image keeping hard edges sharp.
+QImage scale2x(const QImage &src)
+{
+    const QImage in = src.convertToFormat(QImage::Format_ARGB32);
+    const int w = in.width(), h = in.height();
+    QImage out(w * 2, h * 2, QImage::Format_ARGB32);
+    auto px = [&](int x, int y) {
+        return reinterpret_cast<const QRgb *>(in.constScanLine(qBound(0, y, h - 1)))[qBound(0, x, w - 1)];
+    };
+    for (int y = 0; y < h; ++y) {
+        QRgb *o0 = reinterpret_cast<QRgb *>(out.scanLine(2 * y));
+        QRgb *o1 = reinterpret_cast<QRgb *>(out.scanLine(2 * y + 1));
+        for (int x = 0; x < w; ++x) {
+            const QRgb e = px(x, y), b = px(x, y - 1), d = px(x - 1, y), f = px(x + 1, y), hh = px(x, y + 1);
+            o0[2 * x] = (d == b && b != f && d != hh) ? d : e;
+            o0[2 * x + 1] = (b == f && b != d && f != hh) ? f : e;
+            o1[2 * x] = (d == hh && d != b && hh != f) ? d : e;
+            o1[2 * x + 1] = (hh == f && d != hh && b != f) ? f : e;
+        }
+    }
+    return out;
+}
+
+QIcon upscaledIcon(const QIcon &icon, int size)
+{
+    int largest = 0;
+    for (const QSize &s : icon.availableSizes())
+        largest = qMax(largest, s.width());
+    if (largest <= 0)
+        return icon;
+    QIcon out;
+    for (QIcon::Mode mode : {QIcon::Normal, QIcon::Disabled, QIcon::Active, QIcon::Selected})
+        for (QIcon::State state : {QIcon::Off, QIcon::On}) {
+            QImage img = icon.pixmap(QSize(largest, largest), mode, state).toImage();
+            if (img.isNull())
+                continue;
+            while (img.width() * 2 <= size)
+                img = scale2x(img);
+            if (img.width() != size)
+                img = img.scaled(size, size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            out.addPixmap(QPixmap::fromImage(img), mode, state);
+        }
+    return out;
+}
+
+void fixToolbar(QWidget *toolbar)
+{
+    const int size = toolbarIconSize();
+    if (!size)
+        return;
+    const QSize iconSize(size, size);
+    for (QToolButton *b : toolbar->findChildren<QToolButton *>()) {
+        if (b->objectName() == QLatin1String("PanelScrollButtonStyle") || b->icon().isNull())
+            continue;
+        if (b->iconSize() != iconSize)
+            b->setIconSize(iconSize);
+        const qint64 key = b->property("_hwpfp_icon").toLongLong();
+        if (b->icon().cacheKey() == key)
+            continue;
+        int largest = 0;
+        for (const QSize &s : b->icon().availableSizes())
+            largest = qMax(largest, s.width());
+        if (largest < size) { // no large image: enlarge the small one (also
+            const QIcon up = upscaledIcon(b->icon(), size); // after Hwp
+            b->setIcon(up);                                 // changes it)
+            b->setProperty("_hwpfp_icon", up.cacheKey());
+        } else {
+            b->setProperty("_hwpfp_icon", b->icon().cacheKey());
+        }
+    }
+    for (QScrollArea *area : toolbar->findChildren<QScrollArea *>()) {
+        QWidget *content = area->widget();
+        if (!content)
+            continue;
+        // fixed-width boxes (font size, ...) narrower than their contents
+        for (QObject *o : content->children()) {
+            if (!o->isWidgetType())
+                continue;
+            auto *box = static_cast<QWidget *>(o);
+            if (box->minimumWidth() != box->maximumWidth() || !box->isVisible())
+                continue;
+            int need = 0;
+            for (QObject *c : box->children())
+                if (c->isWidgetType() && static_cast<QWidget *>(c)->isVisible()) {
+                    auto *child = static_cast<QWidget *>(c);
+                    need = qMax(need, child->x() + child->sizeHint().width() + child->x());
+                }
+            if (need > box->width()) {
+                box->setFixedWidth(need);
+                if (box->layout())
+                    box->layout()->activate();
+                else
+                    for (QObject *c : box->children())
+                        if (c->isWidgetType() && static_cast<QWidget *>(c)->isVisible())
+                            static_cast<QWidget *>(c)->resize(need - 2 * static_cast<QWidget *>(c)->x(),
+                                                              static_cast<QWidget *>(c)->height());
+            }
+        }
+        // the row's fixed size was computed for 16 px icons
+        content->setMinimumSize(0, 0);
+        content->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+        if (content->layout())
+            content->layout()->activate();
+        const QSize hint = content->sizeHint();
+        content->setFixedSize(hint);
+        area->setMinimumHeight(hint.height());
+        area->setMaximumHeight(hint.height());
+    }
+    toolbar->updateGeometry();
+}
+
+// The recent-file list in the 파일 menu (and the 불러오기 drop-down) reports
+// its real height only after the menu was laid out.
+void fixMenuWidget(QWidget *list)
+{
+    QWidget *wrapper = list->parentWidget();
+    if (!wrapper)
+        return;
+    const int need = list->sizeHint().height();
+    if (need <= wrapper->height() && need <= list->height())
+        return;
+    list->setMinimumHeight(need);
+    wrapper->setMinimumHeight(need);
+    auto *menu = qobject_cast<QMenu *>(wrapper->parentWidget());
+    if (!menu)
+        return;
+    for (QAction *a : menu->actions())
+        if (qobject_cast<QWidgetAction *>(a)) { // QMenu re-measures its items
+            QActionEvent changed(QEvent::ActionChanged, a);
+            notifyObject(menu, &changed);
+        }
+}
+
+class AppFilter : public QObject
 {
 public:
     bool eventFilter(QObject *obj, QEvent *ev) override
     {
-        if (ev->type() != QEvent::Wheel || injecting || !obj->isWidgetType()
+        const QEvent::Type type = ev->type();
+        if (type == QEvent::Wheel)
+            return wheel(obj, ev);
+        if (!uiFixes() || !obj->isWidgetType())
+            return false;
+        if (type == QEvent::Show || type == QEvent::LayoutRequest) {
+            if (isClass(obj, "hanul::RecentFileListWidget"))
+                later(obj, [](QWidget *w) { fixMenuWidget(w); });
+            else if (type == QEvent::Show && isClass(obj, "hanul::ToolBarImpl"))
+                later(obj, [](QWidget *w) { fixToolbar(w); });
+        } else if (type == QEvent::Paint && toolbarIconSize()
+                   && qobject_cast<QToolButton *>(obj)) {
+            auto *b = static_cast<QToolButton *>(obj);
+            const int size = toolbarIconSize();
+            if (b->property("_hwpfp_icon").isValid()
+                && (b->iconSize() != QSize(size, size)
+                    || b->icon().cacheKey() != b->property("_hwpfp_icon").toLongLong())) {
+                // Hwp replaced the icon (e.g. the text colour button) or the size
+                for (QWidget *p = b->parentWidget(); p; p = p->parentWidget())
+                    if (isClass(p, "hanul::ToolBarImpl")) {
+                        later(p, [](QWidget *w) { fixToolbar(w); });
+                        break;
+                    }
+            }
+        }
+        return false;
+    }
+
+private:
+    template <typename F> void later(QObject *obj, F fix)
+    {
+        QPointer<QWidget> w(static_cast<QWidget *>(obj));
+        if (scheduled.contains(obj))
+            return;
+        scheduled.insert(obj);
+        QTimer::singleShot(0, this, [this, w, obj, fix] {
+            scheduled.remove(obj);
+            if (w)
+                fix(w.data());
+        });
+    }
+    QSet<QObject *> scheduled; // fixes queued for after the current event
+
+    // ---- wheel event coalescing ----
+    bool wheel(QObject *obj, QEvent *ev)
+    {
+        if (injecting || !fastScroll() || hashMode() || !obj->isWidgetType()
             || strcmp(obj->metaObject()->className(), "HspNativeWindow") != 0)
             return false;
         auto *we = static_cast<QWheelEvent *>(ev);
@@ -429,6 +676,7 @@ public:
         return true; // delivered (merged) by deliver()
     }
 
+public:
     bool event(QEvent *ev) override
     {
         if (ev->type() != QEvent::User)
@@ -450,15 +698,8 @@ private:
                            source, inverted);
         if (debug())
             fprintf(stderr, "fastpatch: wheel delta (%d,%d) delivered\n", angle.x(), angle.y());
-        // QCoreApplication::sendEvent() is inline in Qt 5.11 (the ibus variant
-        // runs on it) and exported in 5.15; both call notifyInternal2().
-        using NotifyFn = bool (*)(QObject *, QEvent *);
-        static auto notify = reinterpret_cast<NotifyFn>(
-            dlsym(RTLD_DEFAULT, "_ZN16QCoreApplication15notifyInternal2EP7QObjectP6QEvent"));
-        if (!notify)
-            return;
         injecting = true;
-        notify(target, &merged);
+        notifyObject(target, &merged);
         injecting = false;
     }
 
@@ -472,13 +713,13 @@ private:
     Qt::MouseEventSource source = Qt::MouseEventNotSynthesized;
 };
 
-void installWheelCoalescer()
+void installAppFilter()
 {
     static bool done;
-    if (done || !fastScroll() || hashMode() || !QCoreApplication::instance())
+    if (done || !QCoreApplication::instance() || (!fastScroll() && !uiFixes()))
         return;
     done = true;
-    QCoreApplication::instance()->installEventFilter(new WheelCoalescer);
+    QCoreApplication::instance()->installEventFilter(new AppFilter);
 }
 
 void dumpImage(const void *holder, const QImage *img, const char *dir)
@@ -539,7 +780,7 @@ extern "C" __attribute__((visibility("default"))) uintptr_t
 hwp_fastpatch_entry(uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d, uintptr_t e)
 {
     const uintptr_t at = callerOffset(__builtin_return_address(0));
-    installWheelCoalescer(); // first call happens once the application runs
+    installAppFilter(); // first call happens once the application runs
     switch (at) {
     case kStartCall:
     case kEndCall: // a = QByteArray *result (sret), b = window holder
