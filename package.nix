@@ -232,7 +232,7 @@ stdenv.mkDerivation {
       qt = libsForQt5.qtbase;
     in
     ''
-      $CXX -std=c++17 -shared -fPIC -O2 -fvisibility=hidden -pthread -DQT_NO_VERSION_TAGGING \
+      $CXX -std=c++17 -shared -fPIC -O2 -fvisibility=hidden -pthread -DQT_NO_VERSION_TAGGING -Wno-deprecated-declarations \
         -o libhwp-fastpatch.so ${./compat/libhwp-fastpatch.cpp} \
         -I${lib.getDev qt}/include -I${lib.getDev qt}/include/QtCore \
         -I${lib.getDev qt}/include/QtGui -I${lib.getDev qt}/include/QtWidgets \
@@ -266,12 +266,12 @@ stdenv.mkDerivation {
     done
   ''
   + lib.optionalString fastRepaint ''
-    # libhsp's window-image fingerprint -> hwp_fast_fingerprint (see compat/)
+    # libhsp's window-image fingerprint -> hwp_fastpatch_entry (see compat/)
     hsp=$out/${appDir}/Bin/libhsp.so
     python3 ${./compat/patch-libhsp.py} $hsp
-    echo "_ZNK6QImage11sizeInBytesEv hwp_fast_fingerprint" > rename.map
+    echo "_ZNK6QImage11sizeInBytesEv hwp_fastpatch_entry" > rename.map
     ${lib.getExe patchelfUnstable} --rename-dynamic-symbols rename.map $hsp
-    ${lib.getExe patchelfUnstable} --clear-symbol-version hwp_fast_fingerprint $hsp
+    ${lib.getExe patchelfUnstable} --clear-symbol-version hwp_fastpatch_entry $hsp
     ${lib.getExe patchelfUnstable} --add-needed libhwp-fastpatch.so $hsp
     install -m755 libhwp-fastpatch.so $out/${appDir}/Bin/
   ''
