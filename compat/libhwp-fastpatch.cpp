@@ -521,6 +521,30 @@ QIcon upscaledIcon(const QIcon &icon, int size)
     return out;
 }
 
+// Give a toolbar button the large icon size and, if its icon has no large
+// image, a Scale2x-enlarged copy. Returns whether anything changed.
+bool fixButton(QToolButton *b, int size)
+{
+    bool changed = false;
+    if (b->iconSize() != QSize(size, size)) {
+        b->setIconSize(QSize(size, size));
+        changed = true;
+    }
+    if (b->icon().cacheKey() == b->property("_hwpfp_icon").toLongLong())
+        return changed;
+    int largest = 0;
+    for (const QSize &s : b->icon().availableSizes())
+        largest = qMax(largest, s.width());
+    if (largest < size) { // no large image: enlarge the small one
+        const QIcon up = upscaledIcon(b->icon(), size);
+        b->setIcon(up);
+        b->setProperty("_hwpfp_icon", up.cacheKey());
+        return true;
+    }
+    b->setProperty("_hwpfp_icon", b->icon().cacheKey());
+    return changed;
+}
+
 // hanul::ToolBarImpl (formatting toolbar: all buttons) or hanul::PanelScroll
 // (ribbon: only the small, icon-only buttons; the large ones are 32 px).
 void fixToolbar(QWidget *toolbar)
@@ -536,21 +560,7 @@ void fixToolbar(QWidget *toolbar)
         if (ribbon && !b->property("_hwpfp_icon").isValid()
             && (b->toolButtonStyle() != Qt::ToolButtonIconOnly || b->iconSize().width() >= size))
             continue;
-        if (b->iconSize() != iconSize)
-            b->setIconSize(iconSize);
-        const qint64 key = b->property("_hwpfp_icon").toLongLong();
-        if (b->icon().cacheKey() == key)
-            continue;
-        int largest = 0;
-        for (const QSize &s : b->icon().availableSizes())
-            largest = qMax(largest, s.width());
-        if (largest < size) { // no large image: enlarge the small one (also
-            const QIcon up = upscaledIcon(b->icon(), size); // after Hwp
-            b->setIcon(up);                                 // changes it)
-            b->setProperty("_hwpfp_icon", up.cacheKey());
-        } else {
-            b->setProperty("_hwpfp_icon", b->icon().cacheKey());
-        }
+        fixButton(b, size);
     }
     for (QScrollArea *area : toolbar->findChildren<QScrollArea *>()) {
         QWidget *content = area->widget();
@@ -649,26 +659,36 @@ public:
             return wheel(obj, ev);
         if (!uiFixes() || !obj->isWidgetType())
             return false;
+        // Hwp replaces some icons (글자 색: on every keystroke, to draw the
+        // current colour) at 16 px. Fix the button before Qt lays it out or
+        // paints it: setIcon() posts a LayoutRequest to the parent ahead of
+        // the (low-priority) repaint. Deferring the fix made the button and
+        // everything after it jump between the small and the large size.
+        if (toolbarIconSize() && (type == QEvent::LayoutRequest || type == QEvent::Paint)) {
+            const int size = toolbarIconSize();
+            auto fix = [size](QToolButton *b, const char *when) {
+                const int before = b->iconSize().width();
+                if (fixButton(b, size) && debug())
+                    fprintf(stderr, "fastpatch: toolbar button '%s' fixed at %s (icon size was %d)\n",
+                            b->text().simplified().toUtf8().constData(), when, before);
+            };
+            if (type == QEvent::Paint) {
+                if (auto *b = qobject_cast<QToolButton *>(obj))
+                    if (b->property("_hwpfp_icon").isValid())
+                        fix(b, "paint");
+            } else {
+                for (QObject *c : obj->children())
+                    if (auto *b = qobject_cast<QToolButton *>(c))
+                        if (b->property("_hwpfp_icon").isValid())
+                            fix(b, "layout");
+            }
+        }
         if (type == QEvent::Show || type == QEvent::LayoutRequest) {
             if (isClass(obj, "hanul::RecentFileListWidget"))
                 later(obj, [](QWidget *w) { fixMenuWidget(w); });
             else if (type == QEvent::Show
                      && (isClass(obj, "hanul::ToolBarImpl") || isClass(obj, "hanul::PanelScroll")))
                 later(obj, [](QWidget *w) { fixToolbar(w); });
-        } else if (type == QEvent::Paint && toolbarIconSize()
-                   && qobject_cast<QToolButton *>(obj)) {
-            auto *b = static_cast<QToolButton *>(obj);
-            const int size = toolbarIconSize();
-            if (b->property("_hwpfp_icon").isValid()
-                && (b->iconSize() != QSize(size, size)
-                    || b->icon().cacheKey() != b->property("_hwpfp_icon").toLongLong())) {
-                // Hwp replaced the icon (e.g. the text colour button) or the size
-                for (QWidget *p = b->parentWidget(); p; p = p->parentWidget())
-                    if (isClass(p, "hanul::ToolBarImpl") || isClass(p, "hanul::PanelScroll")) {
-                        later(p, [](QWidget *w) { fixToolbar(w); });
-                        break;
-                    }
-            }
         }
         return false;
     }
