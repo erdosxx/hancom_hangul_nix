@@ -59,6 +59,11 @@
   # 127 -> ~20 ms. See compat/libhwp-fastpatch.cpp.
   # false = keep Hancom's libhsp.so unchanged.
   fastRepaint ? true,
+  # Faster mouse-wheel scrolling (see compat/patch-hwp.py and the Scrolling /
+  # Wheel events sections of compat/libhwp-fastpatch.cpp): one scroll step per
+  # wheel notch instead of three, real ScrollWindow()/UpdateWindow() (with
+  # fastRepaint), and queued wheel notches merged into one step.
+  fastScroll ? true,
 }:
 
 assert lib.assertOneOf "inputMethod" inputMethod [
@@ -156,7 +161,7 @@ stdenv.mkDerivation {
     makeWrapper
     patchelfUnstable
   ]
-  ++ lib.optional fastRepaint python3;
+  ++ lib.optional (fastRepaint || fastScroll) python3;
 
   buildInputs = [
     alsa-lib
@@ -275,6 +280,9 @@ stdenv.mkDerivation {
     ${lib.getExe patchelfUnstable} --add-needed libhwp-fastpatch.so $hsp
     install -m755 libhwp-fastpatch.so $out/${appDir}/Bin/
   ''
+  + lib.optionalString fastScroll ''
+    python3 ${./compat/patch-hwp.py} $out/${appDir}/Bin/hwp
+  ''
   + ''
 
     qtdir=$out/${appDir}/Bin/qt
@@ -338,7 +346,8 @@ stdenv.mkDerivation {
         --set LOCALE_ARCHIVE ${glibcLocales}/lib/locale/locale-archive \
         --set-default QTCOMPOSE ${libx11}/share/X11/locale \
         --set-default LC_ALL ${hwpLocale} \
-        --set-default LANG ${hwpLocale}
+        --set-default LANG ${hwpLocale} \
+        ${lib.optionalString (fastRepaint && !fastScroll) "--set HWP_FASTSCROLL 0"}
 
     substituteInPlace $out/share/applications/hoffice11-hwp.desktop \
       --replace-fail "Exec=/${appDir}/Bin/hwp" "Exec=$out/bin/hwp"
