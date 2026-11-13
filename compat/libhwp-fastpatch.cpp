@@ -60,13 +60,15 @@
 // High-DPI UI fixes
 // -----------------
 // Hwp sizes its UI text by the screen DPI (Xft.dpi) but draws the formatting
-// toolbar's icons at a fixed 16 px. On high-DPI screens the same event filter
-//   * sets the toolbar icon size to 16 x round(DPI / 96) (32 at 144-191 DPI;
-//     HWP_TOOLBAR_ICON_SIZE=N overrides, 0 or 16 = off). patch-ui.py gives the
-//     toolbar Hancom's own 32 px icons where they exist; any other icon is
+// toolbar's icons and the ribbon's small buttons at a fixed 16 px. On
+// high-DPI screens the same event filter
+//   * sets those icons to 16 x round(DPI / 96) px (32 at 144-191 DPI;
+//     HWP_TOOLBAR_ICON_SIZE=N overrides, 0 or 16 = off). patch-ui.py gives
+//     them Hancom's own 32 px icons where they exist; any other icon is
 //     enlarged with Scale2x (pixel-art scaling: sharp, no blur);
-//   * widens fixed-width toolbar boxes that are too narrow for their text
-//     (the font size box drew "pt" over the number);
+//   * widens fixed-width boxes that are too narrow for their text (the font
+//     size box drew "pt" over the number) and makes the spin boxes (글자
+//     크기, 줄 간격) as tall as the combo boxes next to them;
 //   * re-sizes the menu row of the recent-file list once the list knows its
 //     height (it reported 20 px when the menu was laid out, cutting off the
 //     file names).
@@ -519,14 +521,20 @@ QIcon upscaledIcon(const QIcon &icon, int size)
     return out;
 }
 
+// hanul::ToolBarImpl (formatting toolbar: all buttons) or hanul::PanelScroll
+// (ribbon: only the small, icon-only buttons; the large ones are 32 px).
 void fixToolbar(QWidget *toolbar)
 {
     const int size = toolbarIconSize();
     if (!size)
         return;
+    const bool ribbon = isClass(toolbar, "hanul::PanelScroll");
     const QSize iconSize(size, size);
     for (QToolButton *b : toolbar->findChildren<QToolButton *>()) {
         if (b->objectName() == QLatin1String("PanelScrollButtonStyle") || b->icon().isNull())
+            continue;
+        if (ribbon && !b->property("_hwpfp_icon").isValid()
+            && (b->toolButtonStyle() != Qt::ToolButtonIconOnly || b->iconSize().width() >= size))
             continue;
         if (b->iconSize() != iconSize)
             b->setIconSize(iconSize);
@@ -548,12 +556,30 @@ void fixToolbar(QWidget *toolbar)
         QWidget *content = area->widget();
         if (!content)
             continue;
-        // fixed-width boxes (font size, ...) narrower than their contents
-        for (QObject *o : content->children()) {
-            if (!o->isWidgetType())
+        // spin boxes (글자 크기, 줄 간격) as tall as the combo boxes
+        int comboHeight = 0;
+        for (QWidget *c : content->findChildren<QWidget *>())
+            if (isClass(c, "hanul::ComboImpl") && c->isVisible())
+                comboHeight = qMax(comboHeight, c->height());
+        if (comboHeight > 0)
+            for (QWidget *spin : content->findChildren<QWidget *>()) {
+                if (!isClass(spin, "hanul::SpinImpl") || spin->height() >= comboHeight - 2)
+                    continue;
+                spin->setMinimumHeight(comboHeight - 2);
+                QWidget *box = spin->parentWidget();
+                if (box && box != content) {
+                    box->setMinimumHeight(comboHeight);
+                    spin->resize(spin->width(), comboHeight - 2);
+                    spin->move(spin->x(), 1);
+                }
+            }
+        // fixed-width boxes around spin boxes (글자 크기, 줄 간격, 쪽 윤곽 %)
+        // that are narrower than their contents; nested in ribbon groups
+        for (QWidget *spinBox : content->findChildren<QWidget *>()) {
+            if (!isClass(spinBox, "hanul::SpinImpl"))
                 continue;
-            auto *box = static_cast<QWidget *>(o);
-            if (box->minimumWidth() != box->maximumWidth() || !box->isVisible())
+            QWidget *box = spinBox->parentWidget();
+            if (!box || box == content || box->minimumWidth() != box->maximumWidth() || !box->isVisible())
                 continue;
             int need = 0;
             for (QObject *c : box->children())
@@ -573,11 +599,17 @@ void fixToolbar(QWidget *toolbar)
             }
         }
         // the row's fixed size was computed for 16 px icons
+        const int oldHeight = content->height();
         content->setMinimumSize(0, 0);
         content->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+        for (QWidget *w : content->findChildren<QWidget *>()) // nested rows / groups
+            if (w->layout())
+                w->layout()->invalidate();
         if (content->layout())
             content->layout()->activate();
-        const QSize hint = content->sizeHint();
+        QSize hint = content->sizeHint();
+        if (ribbon) // the ribbon keeps its height; only its groups get wider
+            hint.setHeight(qMax(hint.height(), oldHeight));
         content->setFixedSize(hint);
         area->setMinimumHeight(hint.height());
         area->setMaximumHeight(hint.height());
@@ -620,7 +652,8 @@ public:
         if (type == QEvent::Show || type == QEvent::LayoutRequest) {
             if (isClass(obj, "hanul::RecentFileListWidget"))
                 later(obj, [](QWidget *w) { fixMenuWidget(w); });
-            else if (type == QEvent::Show && isClass(obj, "hanul::ToolBarImpl"))
+            else if (type == QEvent::Show
+                     && (isClass(obj, "hanul::ToolBarImpl") || isClass(obj, "hanul::PanelScroll")))
                 later(obj, [](QWidget *w) { fixToolbar(w); });
         } else if (type == QEvent::Paint && toolbarIconSize()
                    && qobject_cast<QToolButton *>(obj)) {
@@ -631,7 +664,7 @@ public:
                     || b->icon().cacheKey() != b->property("_hwpfp_icon").toLongLong())) {
                 // Hwp replaced the icon (e.g. the text colour button) or the size
                 for (QWidget *p = b->parentWidget(); p; p = p->parentWidget())
-                    if (isClass(p, "hanul::ToolBarImpl")) {
+                    if (isClass(p, "hanul::ToolBarImpl") || isClass(p, "hanul::PanelScroll")) {
                         later(p, [](QWidget *w) { fixToolbar(w); });
                         break;
                     }
