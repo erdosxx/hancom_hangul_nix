@@ -180,19 +180,21 @@ inputs.hancom-hwp.packages.${system}.hancom-fonts.override { fontSets = [ "hanco
   (both variants). `HWP_FASTSCROLL=0` turns the library part off at runtime.
 - **High-DPI UI (`hidpiUi`, default on, needs `fastRepaint`):** Hwp sizes UI
   text by the screen DPI (`Xft.dpi`), but its formatting toolbar (새 문서,
-  불러오기, 저장하기, ..., 글자 크기) uses fixed 16 px icons and box widths. On a
+  불러오기, 저장하기, ..., 글자 크기) and the small caption-less buttons of the
+  ribbon (서식, 편집, ... tabs) use fixed 16 px icons and box sizes. On a
   2560x1600 screen at 172 DPI the icons were tiny next to the text, the font
-  size box drew "pt" over the number, and the recent files in the 파일 menu
-  were cut to half height (the list reports its height only after the menu
-  was laid out).
-  - `compat/patch-ui.py` points the toolbar at Hancom's own 32 px icons (the
-    ribbon's `lg_*.png`) where they exist.
+  size box drew "pt" over the number, the 글자 크기 / 줄 간격 boxes were half
+  as tall as the rest, and the recent files in the 파일 menu were cut to half
+  height (the list reports its height only after the menu was laid out).
+  - `compat/patch-ui.py` points the toolbar and the ribbon's small buttons at
+    Hancom's own 32 px icons (`lg_*.png`) where they exist (258 items).
   - The library sets the toolbar icon size to 16 × round(DPI / 96) (32 px at
     144–191 DPI, unchanged at 96 DPI; `HWP_TOOLBAR_ICON_SIZE=N` overrides).
     Icons without a large version (new, open, save, undo, redo, text colour)
     are enlarged with Scale2x, a pixel-art scaler that keeps edges sharp
-    instead of blurring them like `QT_SCALE_FACTOR` does. Fixed-width toolbar
-    boxes are widened to fit their text.
+    instead of blurring them like `QT_SCALE_FACTOR` does. Ribbon buttons with
+    a caption keep their size; the ribbon keeps its height. Spin boxes are
+    widened to fit their text and made as tall as the combo boxes.
   - It re-sizes the recent-file row of the 파일 menu once the list knows its
     height.
 
