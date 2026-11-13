@@ -53,6 +53,7 @@ inputs.hancom-hwp.packages.${system}.default.override {
   inputMethod = "fcitx5";     # or "ibus"
   hwpLocale   = "ko_KR.UTF-8";
   fastRepaint = true;         # false = leave Hancom's libhsp.so unpatched
+  fastScroll  = true;         # false = keep Hwp's own mouse-wheel scrolling
 }
 ```
 
@@ -147,7 +148,35 @@ inputs.hancom-hwp.packages.${system}.hancom-fonts.override { fontSets = [ "hanco
   resize, `.hwp` and `.hwpx` files): no pixel differs. Runtime switches:
   `HWP_REPAINT=hash` (whole-window updates, with XXH3 instead of MD5),
   `HWP_FASTPATCH_THREADS=1` (less CPU while typing, ~28 ms instead of ~20 ms
-  latency at 2540x1500), `HWP_FASTPATCH_DUMP=DIR` (debug dumps).
+  latency at 2540x1500), `HWP_FASTPATCH_DUMP=DIR` (debug dumps),
+  `HWP_FASTPATCH_DEBUG=1` (log scroll/wheel/diff decisions).
+- **Faster mouse-wheel scrolling (`fastScroll`, default on):** Hwp scrolled
+  slowly, and kept scrolling for seconds after a quick spin (also in
+  11.20.0.989), because:
+  - its wheel handler scrolls in `SPI_GETWHEELSCROLLLINES` (3) separate steps
+    per notch, and every step costs ~100+ ms of Hwp's own UI work (layout,
+    style sheets, XML, font and picture look-ups), whatever is repainted;
+  - libhsp's `ScrollWindow()` does nothing and its `UpdateWindow()` repaints
+    the whole window, so each step also re-renders the whole view;
+  - each notch is processed in full before the next one, so notches queue up.
+
+  Fixes: `compat/patch-hwp.py` makes the wheel handler call
+  `CHwpView::OnScroll` once with `notches × lines` (same distance, one step).
+  With `fastRepaint`, `libhwp-fastpatch.cpp` implements `ScrollWindow()` for the
+  document view (moves the back buffer and the screen with
+  `QWidget::scroll()`, so only the exposed strip is painted), gives such
+  windows Win32 `UpdateWindow()` semantics (paint only the invalid region),
+  and merges wheel notches that queued up while Hwp was busy into one step.
+
+  | 2540x1500 window, `.hwp` with pictures | wheel notch: first paint / settled | 20 notches in 0.5 s: done after the last |
+  | -------------------------------------- | ---------------------------------- | ---------------------------------------- |
+  | before                                 | 83 / 535 ms                        | 8.1 s                                    |
+  | `fastScroll`                           | 84 / 188 ms                        | 0.25 s                                   |
+
+  Distance per notch is unchanged (screenshots after 4 notches are identical;
+  merged notches can differ by 1 px of rounding). The screen matched Hwp's
+  back buffer after wheel, PageDown, arrow-key, scroll-bar and typing steps
+  (both variants). `HWP_FASTSCROLL=0` turns the library part off at runtime.
 - **ibus mode:** keeps the bundled Qt 5.11. Plugins that need Qt modules not in
   the bundle (Wayland, eglfs, webgl, virtual keyboard, MultimediaGstTools) are
   removed.
