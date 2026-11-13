@@ -54,6 +54,7 @@ inputs.hancom-hwp.packages.${system}.default.override {
   hwpLocale   = "ko_KR.UTF-8";
   fastRepaint = true;         # false = leave Hancom's libhsp.so unpatched
   fastScroll  = true;         # false = keep Hwp's own mouse-wheel scrolling
+  hidpiUi     = true;         # false = no high-DPI toolbar / menu fixes
 }
 ```
 
@@ -177,6 +178,25 @@ inputs.hancom-hwp.packages.${system}.hancom-fonts.override { fontSets = [ "hanco
   merged notches can differ by 1 px of rounding). The screen matched Hwp's
   back buffer after wheel, PageDown, arrow-key, scroll-bar and typing steps
   (both variants). `HWP_FASTSCROLL=0` turns the library part off at runtime.
+- **High-DPI UI (`hidpiUi`, default on, needs `fastRepaint`):** Hwp sizes UI
+  text by the screen DPI (`Xft.dpi`), but its formatting toolbar (새 문서,
+  불러오기, 저장하기, ..., 글자 크기) uses fixed 16 px icons and box widths. On a
+  2560x1600 screen at 172 DPI the icons were tiny next to the text, the font
+  size box drew "pt" over the number, and the recent files in the 파일 menu
+  were cut to half height (the list reports its height only after the menu
+  was laid out).
+  - `compat/patch-ui.py` points the toolbar at Hancom's own 32 px icons (the
+    ribbon's `lg_*.png`) where they exist.
+  - The library sets the toolbar icon size to 16 × round(DPI / 96) (32 px at
+    144–191 DPI, unchanged at 96 DPI; `HWP_TOOLBAR_ICON_SIZE=N` overrides).
+    Icons without a large version (new, open, save, undo, redo, text colour)
+    are enlarged with Scale2x, a pixel-art scaler that keeps edges sharp
+    instead of blurring them like `QT_SCALE_FACTOR` does. Fixed-width toolbar
+    boxes are widened to fit their text.
+  - It re-sizes the recent-file row of the 파일 menu once the list knows its
+    height.
+
+  `HWP_UIFIX=0` turns the runtime part off.
 - **ibus mode:** keeps the bundled Qt 5.11. Plugins that need Qt modules not in
   the bundle (Wayland, eglfs, webgl, virtual keyboard, MultimediaGstTools) are
   removed.
