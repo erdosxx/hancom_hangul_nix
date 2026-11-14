@@ -82,6 +82,7 @@
 #include <QtGui/QGuiApplication>
 #include <QtGui/QIcon>
 #include <QtGui/QScreen>
+#include <QtGui/QResizeEvent>
 #include <QtGui/QWheelEvent>
 #include <QtWidgets/QLayout>
 #include <QtWidgets/QMenu>
@@ -523,6 +524,11 @@ QIcon upscaledIcon(const QIcon &icon, int size)
 
 // Give a toolbar button the large icon size and, if its icon has no large
 // image, a Scale2x-enlarged copy. Returns whether anything changed.
+//
+// The button's minimum size is then pinned to its large size: Hwp re-creates
+// some icons at 16 px (글자 색 on every keystroke) and sometimes lays the row
+// out right away, before this can run; without the pin the button shrinks
+// for a moment and every button after it in the row jumps.
 bool fixButton(QToolButton *b, int size)
 {
     bool changed = false;
@@ -530,19 +536,35 @@ bool fixButton(QToolButton *b, int size)
         b->setIconSize(QSize(size, size));
         changed = true;
     }
-    if (b->icon().cacheKey() == b->property("_hwpfp_icon").toLongLong())
-        return changed;
-    int largest = 0;
-    for (const QSize &s : b->icon().availableSizes())
-        largest = qMax(largest, s.width());
-    if (largest < size) { // no large image: enlarge the small one
-        const QIcon up = upscaledIcon(b->icon(), size);
-        b->setIcon(up);
-        b->setProperty("_hwpfp_icon", up.cacheKey());
-        return true;
+    if (b->icon().cacheKey() != b->property("_hwpfp_icon").toLongLong()) {
+        int largest = 0;
+        for (const QSize &s : b->icon().availableSizes())
+            largest = qMax(largest, s.width());
+        if (largest < size) { // no large image: enlarge the small one
+            const QIcon up = upscaledIcon(b->icon(), size);
+            b->setIcon(up);
+            b->setProperty("_hwpfp_icon", up.cacheKey());
+            changed = true;
+        } else {
+            b->setProperty("_hwpfp_icon", b->icon().cacheKey());
+        }
     }
-    b->setProperty("_hwpfp_icon", b->icon().cacheKey());
+    const QSize hint = b->sizeHint();
+    if (hint.width() > b->minimumWidth() || hint.height() > b->minimumHeight()) {
+        b->setMinimumSize(hint.expandedTo(b->minimumSize()));
+        changed = true;
+    }
     return changed;
+}
+
+// Process the layout requests that size changes posted, now: otherwise the
+// ribbon keeps its old (16 px) group widths, squeezes the enlarged buttons,
+// and re-lays them out later, at the next size hint change (e.g. when Hwp
+// redraws the 글자 색 icon while you type), so all buttons in the row jump.
+void settleLayouts()
+{
+    for (int i = 0; i < 8; ++i)
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
 }
 
 // hanul::ToolBarImpl (formatting toolbar: all buttons) or hanul::PanelScroll
@@ -560,8 +582,10 @@ void fixToolbar(QWidget *toolbar)
         if (ribbon && !b->property("_hwpfp_icon").isValid()
             && (b->toolButtonStyle() != Qt::ToolButtonIconOnly || b->iconSize().width() >= size))
             continue;
-        fixButton(b, size);
+        if (fixButton(b, size))
+            b->updateGeometry();
     }
+    settleLayouts();
     for (QScrollArea *area : toolbar->findChildren<QScrollArea *>()) {
         QWidget *content = area->widget();
         if (!content)
@@ -608,6 +632,7 @@ void fixToolbar(QWidget *toolbar)
                                                               static_cast<QWidget *>(c)->height());
             }
         }
+        settleLayouts();
         // the row's fixed size was computed for 16 px icons
         const int oldHeight = content->height();
         content->setMinimumSize(0, 0);
@@ -623,8 +648,10 @@ void fixToolbar(QWidget *toolbar)
         content->setFixedSize(hint);
         area->setMinimumHeight(hint.height());
         area->setMaximumHeight(hint.height());
+        settleLayouts();
     }
     toolbar->updateGeometry();
+    settleLayouts();
 }
 
 // The recent-file list in the 파일 menu (and the 불러오기 drop-down) reports
@@ -683,12 +710,28 @@ public:
                             fix(b, "layout");
             }
         }
+        if (type == QEvent::Resize && debug())
+            if (auto *b = qobject_cast<QToolButton *>(obj))
+                if (b->property("_hwpfp_icon").isValid()) {
+                    auto *re = static_cast<QResizeEvent *>(ev);
+                    if (re->oldSize().isValid() && re->oldSize() != re->size())
+                        fprintf(stderr, "fastpatch: toolbar button '%s' resized %dx%d -> %dx%d (icon size %d, avail %d)\n",
+                                b->text().simplified().toUtf8().constData(), re->oldSize().width(),
+                                re->oldSize().height(), re->size().width(), re->size().height(),
+                                b->iconSize().width(),
+                                b->icon().availableSizes().isEmpty() ? 0 : b->icon().availableSizes().last().width());
+                }
         if (type == QEvent::Show || type == QEvent::LayoutRequest) {
             if (isClass(obj, "hanul::RecentFileListWidget"))
                 later(obj, [](QWidget *w) { fixMenuWidget(w); });
             else if (type == QEvent::Show
                      && (isClass(obj, "hanul::ToolBarImpl") || isClass(obj, "hanul::PanelScroll")))
+            {
+                // icons before the first paint; once more after Hwp has set
+                // up the boxes (their text decides the widths)
+                fixToolbar(static_cast<QWidget *>(obj));
                 later(obj, [](QWidget *w) { fixToolbar(w); });
+            }
         }
         return false;
     }
