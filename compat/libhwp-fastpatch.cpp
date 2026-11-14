@@ -87,6 +87,9 @@
 #include <QtWidgets/QLayout>
 #include <QtWidgets/QMenu>
 #include <QtWidgets/QScrollArea>
+#include <QtWidgets/QComboBox>
+#include <QtWidgets/QStyle>
+#include <QtWidgets/QStyleOption>
 #include <QtWidgets/QToolButton>
 #include <QtWidgets/QWidgetAction>
 #include <QtGui/QImage>
@@ -607,6 +610,25 @@ void fixToolbar(QWidget *toolbar)
                     spin->move(spin->x(), 1);
                 }
             }
+        // 글꼴 (font name): wide enough for five Hangul characters
+        // ("함초롬바탕", the default font) instead of a fixed 118 px
+        for (QWidget *c : content->findChildren<QWidget *>()) {
+            auto *combo = qobject_cast<QComboBox *>(c);
+            if (!combo || !isClass(c, "hncofficemodule::FontNameComboImpl"))
+                continue;
+            QStyleOptionComboBox opt;
+            opt.initFrom(combo);
+            opt.editable = combo->isEditable();
+            opt.frame = combo->hasFrame();
+            const QFontMetrics fm(combo->font());
+            const QSize text(fm.boundingRect(QString::fromUtf8("함초롬바탕")).width() + fm.averageCharWidth(),
+                             fm.height());
+            const int need = combo->style()->sizeFromContents(QStyle::CT_ComboBox, &opt, text, combo).width();
+            if (need > combo->minimumWidth()) {
+                combo->setMinimumWidth(need);
+                combo->updateGeometry();
+            }
+        }
         // fixed-width boxes around spin boxes (글자 크기, 줄 간격, 쪽 윤곽 %)
         // that are narrower than their contents; nested in ribbon groups
         for (QWidget *spinBox : content->findChildren<QWidget *>()) {
