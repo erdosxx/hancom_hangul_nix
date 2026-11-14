@@ -610,8 +610,8 @@ void fixToolbar(QWidget *toolbar)
                     spin->move(spin->x(), 1);
                 }
             }
-        // 글꼴 (font name): wide enough for five Hangul characters
-        // ("함초롬바탕", the default font) instead of a fixed 118 px
+        // 글꼴 (font name): wide enough for ten Hangul characters (font
+        // names like 함초롬바탕 and longer) instead of a fixed 118 px
         for (QWidget *c : content->findChildren<QWidget *>()) {
             auto *combo = qobject_cast<QComboBox *>(c);
             if (!combo || !isClass(c, "hncofficemodule::FontNameComboImpl"))
@@ -621,7 +621,7 @@ void fixToolbar(QWidget *toolbar)
             opt.editable = combo->isEditable();
             opt.frame = combo->hasFrame();
             const QFontMetrics fm(combo->font());
-            const QSize text(fm.boundingRect(QString::fromUtf8("함초롬바탕")).width() + fm.averageCharWidth(),
+            const QSize text(fm.boundingRect(QString::fromUtf8("함초롬바탕함초롬바탕")).width() + fm.averageCharWidth(),
                              fm.height());
             const int need = combo->style()->sizeFromContents(QStyle::CT_ComboBox, &opt, text, combo).width();
             if (need > combo->minimumWidth()) {
