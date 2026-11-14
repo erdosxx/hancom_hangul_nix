@@ -194,7 +194,10 @@ inputs.hancom-hwp.packages.${system}.hancom-fonts.override { fontSets = [ "hanco
     are enlarged with Scale2x, a pixel-art scaler that keeps edges sharp
     instead of blurring them like `QT_SCALE_FACTOR` does. Ribbon buttons with
     a caption keep their size; the ribbon keeps its height. Spin boxes are
-    widened to fit their text and made as tall as the combo boxes.
+    widened to fit their text and made as tall as the combo boxes. The 글꼴 box
+    fits ten Hangul characters, and the font name list of its drop-down is
+    widened to the longest name (at least 1.5 times), so it needs no
+    horizontal scrolling.
   - It re-sizes the recent-file row of the 파일 menu once the list knows its
     height.
 

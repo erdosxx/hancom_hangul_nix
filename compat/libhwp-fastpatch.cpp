@@ -88,6 +88,10 @@
 #include <QtWidgets/QMenu>
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QComboBox>
+#include <QtWidgets/QDesktopWidget>
+#include <QtWidgets/QApplication>
+#include <QtWidgets/QScrollBar>
+#include <QtWidgets/QListView>
 #include <QtWidgets/QStyle>
 #include <QtWidgets/QStyleOption>
 #include <QtWidgets/QToolButton>
@@ -676,6 +680,49 @@ void fixToolbar(QWidget *toolbar)
     settleLayouts();
 }
 
+// The 글꼴 drop-down: a popup with two lists side by side, font categories
+// and font names, 149 px each on high-DPI. The names list needed horizontal
+// scrolling; make it 1.5 times as wide, or as wide as the longest name
+// (at most 3 times), and grow the popup with it.
+void fixFontPopup(QWidget *popup)
+{
+    if (!toolbarIconSize() || !(popup->windowFlags() & Qt::Popup) || popup->property("_hwpfp_font").isValid())
+        return;
+    QList<QListView *> lists;
+    for (QObject *c : popup->children())
+        if (auto *l = qobject_cast<QListView *>(c))
+            lists << l;
+    if (lists.size() != 2)
+        return;
+    if (lists[0]->x() > lists[1]->x())
+        std::swap(lists[0], lists[1]);
+    QListView *names = lists[1];
+    if (lists[0]->geometry().right() >= names->x() || names->model() == nullptr)
+        return;
+    popup->setProperty("_hwpfp_font", true);
+    const int old = names->width();
+    int need = names->sizeHintForColumn(0) + 2 * names->frameWidth()
+        + names->verticalScrollBar()->sizeHint().width() + names->fontMetrics().averageCharWidth();
+    int target = qMin(qMax(old * 3 / 2, need), old * 3);
+    const int delta = target - old;
+    if (delta <= 0)
+        return;
+    popup->setMinimumWidth(popup->minimumWidth() + delta);
+    if (popup->layout()) {
+        names->setMinimumWidth(target);
+        popup->layout()->activate();
+    } else {
+        names->resize(target, names->height());
+    }
+    popup->resize(popup->width() + delta, popup->height());
+    // keep it on the screen
+    const QRect avail = QApplication::desktop()->availableGeometry(popup->pos());
+    if (popup->geometry().right() > avail.right())
+        popup->move(qMax(avail.left(), avail.right() - popup->width() + 1), popup->y());
+    if (debug())
+        fprintf(stderr, "fastpatch: font popup: names list %d -> %d px (contents need %d)\n", old, names->width(), need);
+}
+
 // The recent-file list in the 파일 menu (and the 불러오기 drop-down) reports
 // its real height only after the menu was laid out.
 void fixMenuWidget(QWidget *list)
@@ -743,6 +790,8 @@ public:
                                 b->iconSize().width(),
                                 b->icon().availableSizes().isEmpty() ? 0 : b->icon().availableSizes().last().width());
                 }
+        if (type == QEvent::Show && static_cast<QWidget *>(obj)->isWindow())
+            fixFontPopup(static_cast<QWidget *>(obj)); // before it is mapped
         if (type == QEvent::Show || type == QEvent::LayoutRequest) {
             if (isClass(obj, "hanul::RecentFileListWidget"))
                 later(obj, [](QWidget *w) { fixMenuWidget(w); });
