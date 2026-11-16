@@ -67,8 +67,9 @@
   # High-DPI UI fixes (see compat/patch-ui.py and the "High-DPI UI fixes"
   # section of compat/libhwp-fastpatch.cpp; needs fastRepaint): formatting
   # toolbar icons at 16 x round(DPI / 96) px from Hancom's 32 px icons or
-  # Scale2x, a font size box wide enough for its text, and recent file names
-  # in the 파일 menu no longer cut off.
+  # Scale2x, a font size box wide enough for its text, recent file names
+  # in the 파일 menu no longer cut off, and a title bar (window buttons,
+  # program icon) scaled by round(DPI / 96).
   hidpiUi ? true,
 }:
 

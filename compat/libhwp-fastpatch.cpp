@@ -71,7 +71,10 @@
 //     크기, 줄 간격) as tall as the combo boxes next to them;
 //   * re-sizes the menu row of the recent-file list once the list knows its
 //     height (it reported 20 px when the menu was laid out, cutting off the
-//     file names).
+//     file names);
+//   * scales Hwp's own title bar (25 px high, 13 px window button images, a
+//     30 x 22 px program icon) by round(DPI / 96) and moves the window
+//     contents below it.
 // HWP_UIFIX=0 turns these off.
 #include <QtCore/QByteArray>
 #include <QtCore/QCoreApplication>
@@ -81,10 +84,12 @@
 #include <QtCore/QTimer>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QIcon>
+#include <QtGui/QPainter>
 #include <QtGui/QScreen>
 #include <QtGui/QResizeEvent>
 #include <QtGui/QWheelEvent>
 #include <QtWidgets/QLayout>
+#include <QtWidgets/QMainWindow>
 #include <QtWidgets/QMenu>
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QComboBox>
@@ -462,17 +467,25 @@ bool uiFixes()
     return on;
 }
 
+// round(DPI / 96), at least 1: 2 at 144-239 DPI
+int uiScale()
+{
+    static const int scale = [] {
+        const QScreen *screen = QGuiApplication::primaryScreen();
+        const qreal dpi = screen ? screen->logicalDotsPerInchY() : 96;
+        return qMax(1, qRound(dpi / 96));
+    }();
+    return scale;
+}
+
 int toolbarIconSize()
 {
     static int size = -1;
     if (size < 0) {
-        if (const char *e = env("HWP_TOOLBAR_ICON_SIZE")) {
+        if (const char *e = env("HWP_TOOLBAR_ICON_SIZE"))
             size = qBound(0, atoi(e), 128);
-        } else {
-            const QScreen *screen = QGuiApplication::primaryScreen();
-            const qreal dpi = screen ? screen->logicalDotsPerInchY() : 96;
-            size = 16 * qMax(1, qRound(dpi / 96));
-        }
+        else
+            size = 16 * uiScale();
         if (size <= 16)
             size = 0;
     }
@@ -527,6 +540,18 @@ QIcon upscaledIcon(const QIcon &icon, int size)
             out.addPixmap(QPixmap::fromImage(img), mode, state);
         }
     return out;
+}
+
+// Enlarge an image by an integer factor with Scale2x where it doubles, and
+// smooth scaling for the rest.
+QImage enlarged(QImage img, int factor)
+{
+    const QSize target = img.size() * factor;
+    while (img.width() * 2 <= target.width())
+        img = scale2x(img);
+    if (img.size() != target)
+        img = img.scaled(target, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    return img;
 }
 
 // Give a toolbar button the large icon size and, if its icon has no large
@@ -680,6 +705,96 @@ void fixToolbar(QWidget *toolbar)
     settleLayouts();
 }
 
+// ---- Title bar ----
+//
+// Hwp draws its own title bar (hanul::TitleBarImpl) at a fixed 25 px, with
+// 21 px wide window buttons showing 13 px images and a 32 x 25 px
+// hanul::WindowIcon painting the 30 x 22 px program icon; only the title text
+// follows the DPI. All of it is scaled by uiScale(): the button images with
+// Scale2x, the program icon by painting a Scale2x copy of what Hwp painted at
+// the original size. Hwp then places the window contents (a QMainWindow) at a
+// fixed y below the 25 px bar on every resize; placeContents() moves them down.
+
+bool renderingIcon; // WindowIcon paints itself (for the copy), not the copy
+
+// Original height of a title bar that was enlarged, or 0.
+int baseBarHeight(const QWidget *bar)
+{
+    return bar->property("_hwpfp_bar").toInt();
+}
+
+bool isFrameTitleBar(const QWidget *w)
+{
+    return isClass(w, "hanul::TitleBarImpl") && isClass(w->parentWidget(), "hanul::MainWindow");
+}
+
+void placeContents(QWidget *contents)
+{
+    QWidget *frame = contents->parentWidget();
+    if (!qobject_cast<QMainWindow *>(contents) || !isClass(frame, "hanul::MainWindow"))
+        return;
+    for (QObject *c : frame->children()) {
+        auto *bar = static_cast<QWidget *>(c);
+        if (!c->isWidgetType() || !isFrameTitleBar(bar) || !bar->isVisible() || !baseBarHeight(bar))
+            continue;
+        const int delta = bar->height() - baseBarHeight(bar);
+        // Hwp's own position: right below the original bar and its 1 px line
+        if (delta > 0 && contents->y() == bar->y() + baseBarHeight(bar) + 1) {
+            const QRect g = contents->geometry();
+            contents->setGeometry(g.x(), g.y() + delta, g.width(), g.height() - delta);
+        }
+    }
+}
+
+void fixTitleBar(QWidget *bar)
+{
+    const int k = uiScale();
+    if (k < 2 || !isFrameTitleBar(bar))
+        return;
+    if (!baseBarHeight(bar))
+        bar->setProperty("_hwpfp_bar", bar->maximumHeight());
+    if (bar->maximumHeight() != baseBarHeight(bar) * k)
+        bar->setFixedHeight(baseBarHeight(bar) * k);
+    for (QObject *c : bar->children()) {
+        if (auto *b = qobject_cast<QToolButton *>(c)) {
+            if (!b->property("_hwpfp_size").isValid()) {
+                int largest = 0;
+                for (const QSize &s : b->icon().availableSizes())
+                    largest = qMax(largest, s.width());
+                if (!largest)
+                    continue;
+                b->setProperty("_hwpfp_size", largest * k);
+                b->setProperty("_hwpfp_width", b->sizeHint().width() * k);
+            }
+            fixButton(b, b->property("_hwpfp_size").toInt());
+            b->setMinimumWidth(qMax(b->minimumWidth(), b->property("_hwpfp_width").toInt()));
+        } else if (isClass(c, "hanul::WindowIcon") && !c->property("_hwpfp_image").isValid()) {
+            auto *icon = static_cast<QWidget *>(c);
+            QImage img(icon->size(), QImage::Format_ARGB32_Premultiplied);
+            img.fill(Qt::transparent);
+            renderingIcon = true;
+            icon->render(&img, QPoint(), QRegion(), QWidget::DrawChildren);
+            renderingIcon = false;
+            icon->setProperty("_hwpfp_image", QVariant::fromValue(enlarged(img, k)));
+            icon->setFixedSize(icon->size() * k);
+        }
+    }
+    if (bar->layout())
+        bar->layout()->activate();
+    for (QObject *c : bar->parentWidget()->children())
+        if (c->isWidgetType())
+            placeContents(static_cast<QWidget *>(c));
+}
+
+bool paintWindowIcon(QWidget *icon)
+{
+    const QVariant img = icon->property("_hwpfp_image");
+    if (renderingIcon || !img.isValid())
+        return false;
+    QPainter(icon).drawImage(0, 0, img.value<QImage>());
+    return true;
+}
+
 // The 글꼴 drop-down: a popup with two lists side by side, font categories
 // and font names, 149 px each on high-DPI. The names list needed horizontal
 // scrolling; make it 1.5 times as wide, or as wide as the longest name
@@ -760,11 +875,12 @@ public:
         // paints it: setIcon() posts a LayoutRequest to the parent ahead of
         // the (low-priority) repaint. Deferring the fix made the button and
         // everything after it jump between the small and the large size.
-        if (toolbarIconSize() && (type == QEvent::LayoutRequest || type == QEvent::Paint)) {
+        if ((toolbarIconSize() || uiScale() > 1) && (type == QEvent::LayoutRequest || type == QEvent::Paint)) {
             const int size = toolbarIconSize();
             auto fix = [size](QToolButton *b, const char *when) {
                 const int before = b->iconSize().width();
-                if (fixButton(b, size) && debug())
+                const QVariant own = b->property("_hwpfp_size"); // title bar buttons
+                if (fixButton(b, own.isValid() ? own.toInt() : size) && debug())
                     fprintf(stderr, "fastpatch: toolbar button '%s' fixed at %s (icon size was %d)\n",
                             b->text().simplified().toUtf8().constData(), when, before);
             };
@@ -792,6 +908,12 @@ public:
                 }
         if (type == QEvent::Show && static_cast<QWidget *>(obj)->isWindow())
             fixFontPopup(static_cast<QWidget *>(obj)); // before it is mapped
+        if (type == QEvent::Paint && isClass(obj, "hanul::WindowIcon"))
+            return paintWindowIcon(static_cast<QWidget *>(obj));
+        if ((type == QEvent::Show || type == QEvent::Resize) && isClass(obj, "hanul::TitleBarImpl"))
+            later(obj, [](QWidget *w) { fixTitleBar(w); });
+        if (type == QEvent::Move || type == QEvent::Resize)
+            placeContents(static_cast<QWidget *>(obj));
         if (type == QEvent::Show || type == QEvent::LayoutRequest) {
             if (isClass(obj, "hanul::RecentFileListWidget"))
                 later(obj, [](QWidget *w) { fixMenuWidget(w); });

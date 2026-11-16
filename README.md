@@ -200,6 +200,11 @@ inputs.hancom-hwp.packages.${system}.hancom-fonts.override { fontSets = [ "hanco
     horizontal scrolling.
   - It re-sizes the recent-file row of the 파일 menu once the list knows its
     height.
+  - Hwp draws its own title bar at a fixed 25 px, with 13 px window button
+    images (?, 최소화, 최대화, 끝) and a 30 x 22 px program icon, so only the
+    title text grew with the DPI. The library scales the bar, the buttons and
+    the icon by round(DPI / 96) (Scale2x for the images) and moves the window
+    contents below the taller bar.
 
   `HWP_UIFIX=0` turns the runtime part off.
 - **ibus mode:** keeps the bundled Qt 5.11. Plugins that need Qt modules not in

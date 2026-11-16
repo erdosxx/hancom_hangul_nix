@@ -36,6 +36,15 @@
         hancom-fonts = final.callPackage ./fonts.nix { };
       };
 
+      checks.${system} =
+        let
+          hidpiTitleBar = pkgs.callPackage ./tests/hidpi-title-bar.nix { };
+        in
+        {
+          hancom-hwp-hidpi-title-bar = hidpiTitleBar self.packages.${system}.hancom-hwp;
+          hancom-hwp-ibus-hidpi-title-bar = hidpiTitleBar self.packages.${system}.hancom-hwp-ibus;
+        };
+
       formatter.${system} = pkgs.nixfmt;
     };
 }
