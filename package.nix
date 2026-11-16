@@ -230,11 +230,24 @@ stdenv.mkDerivation {
   buildPhase = ''
     runHook preBuild
   ''
-  + lib.optionalString useSystemQt ''
-    $CXX -shared -fPIC -O2 -o libqt511-stdcxx-shim.so \
-      -Wl,--version-script=${./compat/qt511-stdcxx-shim.map} \
-      ${./compat/qt511-stdcxx-shim.cpp}
-  ''
+  + lib.optionalString useSystemQt (
+    let
+      qt = libsForQt5.qtbase;
+      qtGuiPrivate = "${lib.getDev qt}/include/QtGui/${qt.version}";
+    in
+    ''
+      $CXX -shared -fPIC -O2 -o libqt511-stdcxx-shim.so \
+        -Wl,--version-script=${./compat/qt511-stdcxx-shim.map} \
+        ${./compat/qt511-stdcxx-shim.cpp}
+      $CXX -std=c++17 -shared -fPIC -O2 -DQT_NO_VERSION_TAGGING -Wno-deprecated-declarations \
+        -o libqt511-gui-shim.so ${./compat/qt511-gui-shim.cpp} \
+        -Wl,--version-script=${./compat/qt511-gui-shim.map} \
+        -I${lib.getDev qt}/include -I${lib.getDev qt}/include/QtCore \
+        -I${lib.getDev qt}/include/QtGui -I${qtGuiPrivate} -I${qtGuiPrivate}/QtGui \
+        -L${lib.getLib qt}/lib -lQt5Gui -lQt5Core
+      ${lib.getExe patchelfUnstable} --remove-rpath libqt511-gui-shim.so
+    ''
+  )
   # Built against nixpkgs Qt 5.15 headers; it only uses QImage, QRegion and
   # QWidget::update(QRegion), so it also runs on the bundled Qt 5.11 (ibus).
   # The rpath is removed so autoPatchelf picks the Qt the variant uses.
@@ -310,6 +323,13 @@ stdenv.mkDerivation {
         install -m755 libqt511-stdcxx-shim.so $qtdir/lib/
         ${lib.getExe patchelfUnstable} --add-needed libqt511-stdcxx-shim.so \
           $qtdir/lib/libQt5WebEngineCore.so.5.11.3
+        # Hwp itself imports Qt 5.11 symbols that Qt 5.15 lacks; see compat/.
+        # NEEDED by the executable puts both shims in the global scope.
+        install -m755 libqt511-gui-shim.so $qtdir/lib/
+        ${lib.getExe patchelfUnstable} \
+          --add-needed libqt511-stdcxx-shim.so \
+          --add-needed libqt511-gui-shim.so \
+          $out/${appDir}/Bin/hwp
         plugins="${systemQtPluginPath}"
       ''
     else

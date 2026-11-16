@@ -113,10 +113,16 @@ inputs.hancom-hwp.packages.${system}.hancom-fonts.override { fontSets = [ "hanco
   built for Qt 5.15 cannot load into the bundled Qt 5.11.
   QtWebEngine 5 is not in nixpkgs anymore, so the bundled QtWebEngine 5.11 is
   kept (used by `Hmc.so`, the media/web object control). It runs on Qt 5.15
-  with a small shim (`compat/qt511-stdcxx-shim.cpp`) that provides three
+  with a small shim (`compat/qt511-stdcxx-shim.cpp`) that provides
   libstdc++ symbols the bundled Qt 5.11 re-exported under the `Qt_5` version.
   Its executable-stack flag is cleared because current glibc refuses to
   `dlopen` such libraries.
+  Hwp itself also imports two symbols Qt 5.15 lacks:
+  `__cxa_throw_bad_array_new_length@Qt_5` (added to the same shim) and a
+  Qt 5.11 private `QWindowSystemInterface::handleMouseEvent` overload, used
+  when the title bar is dragged. `compat/qt511-gui-shim.cpp` exports the old
+  name and forwards to its Qt 5.15 equivalent. The `*-binds-all-symbols`
+  checks start each variant with `LD_BIND_NOW=1` to catch such gaps.
 - **Fast, partial repaints (`fastRepaint`, default on):** `libhsp.so`
   (Hancom's Win32 emulation layer) keeps a back-buffer image per window. In
   11.20.0.1520 it MD5-hashes the *whole* image when a DC is created and again

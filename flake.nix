@@ -36,6 +36,16 @@
         hancom-fonts = final.callPackage ./fonts.nix { };
       };
 
+      # Heavy: each check unpacks the full Hwp install and runs it under Xvfb.
+      checks.${system} =
+        let
+          bindNow = pkgs.callPackage ./tests/bind-now.nix { };
+        in
+        {
+          hancom-hwp-binds-all-symbols = bindNow self.packages.${system}.hancom-hwp;
+          hancom-hwp-ibus-binds-all-symbols = bindNow self.packages.${system}.hancom-hwp-ibus;
+        };
+
       formatter.${system} = pkgs.nixfmt;
     };
 }

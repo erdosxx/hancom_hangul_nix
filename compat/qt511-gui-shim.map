@@ -1,0 +1,5 @@
+Qt_5_PRIVATE_API {
+  global:
+    _ZN22QWindowSystemInterface16handleMouseEventINS_15DefaultDeliveryEEEvP7QWindowRK7QPointFS6_6QFlagsIN2Qt11MouseButtonEES7_INS8_16KeyboardModifierEENS8_16MouseEventSourceE;
+  local: *;
+};
